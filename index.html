@@ -1,0 +1,1648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lovekang | 夜间图像去雾 · 深度学习</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+  <style>
+    /* ===== RESET & BASE ===== */
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    /* Light theme (default: dark) */
+    :root {
+      --bg-primary: #05080f;
+      --bg-secondary: #0b0f1a;
+      --bg-card: #0f1524;
+      --bg-card-hover: #141b2e;
+      --text-primary: #e8edf5;
+      --text-secondary: #8892a8;
+      --text-muted: #4a5570;
+      --accent-1: #4fc3f7;
+      --accent-2: #81d4fa;
+      --accent-deep: #0288d1;
+      --accent-gradient: linear-gradient(135deg, #4fc3f7, #7c4dff, #b388ff);
+      --glow-color: rgba(79, 195, 247, 0.15);
+      --border-color: rgba(79, 195, 247, 0.08);
+      --nav-bg: rgba(5, 8, 15, 0.75);
+      --scrollbar-bg: #05080f;
+      --scrollbar-thumb: #05080f;
+      --nav-height: 70px;
+    }
+
+    body.light {
+      --bg-primary: #f5f7fa;
+      --bg-secondary: #eef1f6;
+      --bg-card: #ffffff;
+      --bg-card-hover: #f0f3f8;
+      --text-primary: #1a1e2b;
+      --text-secondary: #4a5570;
+      --text-muted: #8892a8;
+      --accent-1: #0288d1;
+      --accent-2: #4fc3f7;
+      --accent-deep: #01579b;
+      --accent-gradient: linear-gradient(135deg, #0288d1, #7c4dff, #b388ff);
+      --glow-color: rgba(2, 136, 209, 0.12);
+      --border-color: rgba(2, 136, 209, 0.12);
+      --nav-bg: rgba(245, 247, 250, 0.85);
+      --scrollbar-bg: #f5f7fa;
+      --scrollbar-thumb: #f5f7fa;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-bg);
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--scrollbar-bg); }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+    body {
+      font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.8;
+      overflow-x: hidden;
+      opacity: 0;
+      transition: background 0.5s ease, color 0.5s ease, opacity 0.8s ease;
+    }
+    body.loaded { opacity: 1; }
+
+    /* ===== LOADING SCREEN ===== */
+    #loader {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: var(--bg-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      transition: opacity 0.8s ease, visibility 0.8s ease;
+    }
+    #loader.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .loader-ring {
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      border-top-color: var(--accent-1);
+      border-right-color: #7c4dff;
+      animation: spin 1s linear infinite;
+      margin-bottom: 1.5rem;
+    }
+    .loader-text {
+      font-size: 0.85rem;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      animation: pulse-text 1.5s ease-in-out infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse-text {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    /* ===== ANIMATED BACKGROUND ===== */
+    #bg-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* ===== THEME & LANG TOGGLE ===== */
+    .top-bar {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+      margin-left: auto;
+      margin-right: 1rem;
+    }
+    .top-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 100px;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.65rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-family: 'JetBrains Mono', monospace;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+    .top-btn:hover {
+      border-color: var(--accent-1);
+      color: var(--text-primary);
+      background: var(--bg-card-hover);
+    }
+    .top-btn.active {
+      border-color: var(--accent-1);
+      color: var(--accent-1);
+    }
+
+    /* ===== NAVIGATION ===== */
+    .navbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: var(--nav-height);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2.5rem;
+      background: var(--nav-bg);
+      backdrop-filter: blur(20px) saturate(1.5);
+      border-bottom: 1px solid var(--border-color);
+      transition: transform 0.4s ease, background 0.5s ease;
+    }
+    .navbar.hidden-nav { transform: translateY(-100%); }
+
+    .nav-logo {
+      font-weight: 700;
+      font-size: 1.1rem;
+      letter-spacing: 0.5px;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .nav-logo::before {
+      content: '> ';
+      -webkit-text-fill-color: var(--accent-1);
+      opacity: 0.6;
+    }
+
+    .nav-links {
+      display: flex;
+      list-style: none;
+      gap: 0.25rem;
+    }
+    .nav-links a {
+      text-decoration: none;
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+      font-weight: 400;
+      padding: 0.5rem 1rem;
+      border-radius: 100px;
+      transition: all 0.3s ease;
+      position: relative;
+      letter-spacing: 0.3px;
+    }
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: 4px; left: 50%;
+      width: 0; height: 2px;
+      background: var(--accent-gradient);
+      border-radius: 2px;
+      transition: all 0.3s ease;
+      transform: translateX(-50%);
+    }
+    .nav-links a:hover,
+    .nav-links a.active {
+      color: var(--text-primary);
+      background: rgba(79, 195, 247, 0.06);
+    }
+    .nav-links a:hover::after,
+    .nav-links a.active::after {
+      width: 60%;
+    }
+
+    .nav-toggle {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 4px;
+    }
+    .nav-toggle span {
+      display: block;
+      width: 24px; height: 2px;
+      background: var(--text-primary);
+      border-radius: 2px;
+      transition: all 0.3s ease;
+    }
+
+    /* ===== SECTIONS COMMON ===== */
+    section {
+      position: relative;
+      z-index: 1;
+      padding: 5rem 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--accent-1);
+      margin-bottom: 0.8rem;
+      font-weight: 400;
+      opacity: 0.7;
+    }
+    .section-label::before {
+      content: '// ';
+      opacity: 0.4;
+    }
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.5px;
+    }
+    .section-subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      max-width: 560px;
+      margin-bottom: 3rem;
+      font-weight: 300;
+    }
+
+    /* ===== HERO ===== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-top: var(--nav-height);
+      position: relative;
+      text-align: center;
+    }
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      animation: fade-up 1.2s ease forwards;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0.35rem 1.2rem;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      font-size: 0.7rem;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      background: rgba(79, 195, 247, 0.04);
+    }
+    .hero-badge .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #00e676;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .hero-avatar-wrapper {
+      position: relative;
+      display: inline-block;
+      margin-bottom: 1.8rem;
+    }
+    .hero-avatar-wrapper::before {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      background: var(--accent-gradient);
+      z-index: -1;
+      animation: rotate-glow 4s linear infinite;
+      opacity: 0.5;
+    }
+    .hero-avatar {
+      width: 110px; height: 110px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 3px solid var(--bg-primary);
+      display: block;
+      transition: transform 0.4s ease, border-color 0.5s ease;
+    }
+    .hero-avatar:hover {
+      transform: scale(1.05);
+    }
+    @keyframes rotate-glow {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 7vw, 4.5rem);
+      font-weight: 700;
+      letter-spacing: -1.5px;
+      line-height: 1.1;
+      margin-bottom: 0.3rem;
+    }
+    .hero h1 .gradient-text {
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: clamp(0.9rem, 1.5vw, 1.1rem);
+      color: var(--text-secondary);
+      font-weight: 300;
+      margin-bottom: 0.6rem;
+    }
+    .hero-sub .seu-badge {
+      display: inline-block;
+      padding: 0.15rem 0.6rem;
+      border-radius: 4px;
+      background: rgba(79, 195, 247, 0.08);
+      border: 1px solid var(--border-color);
+      font-size: 0.8em;
+      color: var(--accent-1);
+    }
+    .hero-typing {
+      font-size: clamp(0.85rem, 1.5vw, 1rem);
+      color: var(--text-muted);
+      font-weight: 300;
+      min-height: 1.8em;
+      margin-bottom: 2rem;
+    }
+    .hero-typing .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1.1em;
+      background: var(--accent-1);
+      margin-left: 2px;
+      animation: blink-cursor 0.8s step-end infinite;
+      vertical-align: text-bottom;
+    }
+    @keyframes blink-cursor {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    .hero-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.8rem 2rem;
+      border-radius: 100px;
+      background: var(--accent-gradient);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.85rem;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      box-shadow: 0 4px 20px var(--glow-color);
+    }
+    .hero-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px var(--glow-color);
+    }
+    .hero-cta .arrow { transition: transform 0.3s ease; display: inline-block; }
+    .hero-cta:hover .arrow { transform: translateX(4px); }
+
+    .scroll-indicator {
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-muted);
+      font-size: 0.65rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      animation: bob 2s ease-in-out infinite;
+    }
+    .scroll-indicator .mouse {
+      width: 18px; height: 30px;
+      border: 2px solid var(--text-muted);
+      border-radius: 12px;
+      position: relative;
+    }
+    .scroll-indicator .mouse::after {
+      content: '';
+      position: absolute;
+      top: 6px; left: 50%;
+      transform: translateX(-50%);
+      width: 3px; height: 7px;
+      background: var(--accent-1);
+      border-radius: 3px;
+      animation: scroll-dot 2s ease-in-out infinite;
+    }
+    @keyframes scroll-dot {
+      0% { transform: translateX(-50%) translateY(0); opacity: 1; }
+      100% { transform: translateX(-50%) translateY(14px); opacity: 0; }
+    }
+    @keyframes bob {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(6px); }
+    }
+
+    /* ===== ABOUT ===== */
+    .about-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+    .about-text p {
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+      font-size: 0.95rem;
+      font-weight: 300;
+      line-height: 1.9;
+    }
+    .about-text .highlight {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+    .about-text .tag-pill {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(79, 195, 247, 0.06);
+      border: 1px solid var(--border-color);
+      font-size: 0.8em;
+      color: var(--accent-1);
+      font-weight: 400;
+    }
+    .about-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.2rem;
+    }
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 1.5rem 1rem;
+      text-align: center;
+      transition: transform 0.3s ease, border-color 0.3s ease, background 0.3s ease;
+    }
+    .stat-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--accent-1);
+      background: var(--bg-card-hover);
+    }
+    .stat-number {
+      font-size: 1.8rem;
+      font-weight: 700;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.3rem;
+      letter-spacing: 0.5px;
+    }
+    .stat-icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.3rem;
+    }
+
+    /* ===== RESEARCH ===== */
+    .research-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1.5rem;
+    }
+    .research-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.8rem;
+      transition: all 0.4s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .research-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 2px;
+      background: var(--accent-gradient);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    .research-card:hover::before {
+      opacity: 1;
+    }
+    .research-card:hover {
+      transform: translateY(-6px);
+      border-color: rgba(79, 195, 247, 0.2);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.3);
+    }
+    .research-icon {
+      font-size: 1.8rem;
+      margin-bottom: 0.8rem;
+    }
+    .research-card h3 {
+      font-size: 1.05rem;
+      font-weight: 500;
+      margin-bottom: 0.6rem;
+    }
+    .research-card p {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 300;
+      line-height: 1.7;
+    }
+    .research-card .tag {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(79, 195, 247, 0.06);
+      border: 1px solid var(--border-color);
+      font-size: 0.7rem;
+      color: var(--accent-1);
+      margin-top: 0.8rem;
+    }
+
+    /* ===== SKILLS ===== */
+    .skills-cloud {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      justify-content: center;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    .skill-tag {
+      padding: 0.6rem 1.3rem;
+      border-radius: 100px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+      font-weight: 400;
+      transition: all 0.35s ease;
+      cursor: default;
+    }
+    .skill-tag:hover {
+      color: var(--text-primary);
+      border-color: var(--accent-1);
+      background: rgba(79, 195, 247, 0.06);
+      transform: translateY(-3px) scale(1.04);
+      box-shadow: 0 8px 24px var(--glow-color);
+    }
+    .skill-tag.highlight {
+      border-color: rgba(79, 195, 247, 0.25);
+      color: var(--accent-1);
+    }
+
+    /* ===== PROJECTS ===== */
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+    .project-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      overflow: hidden;
+      transition: all 0.4s ease;
+      cursor: pointer;
+    }
+    .project-card:hover {
+      transform: translateY(-8px);
+      border-color: var(--accent-1);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    }
+    .project-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      background: linear-gradient(135deg, var(--bg-secondary), var(--bg-card));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .project-thumb .placeholder-icon {
+      font-size: 2rem;
+      opacity: 0.25;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .project-card:hover .placeholder-icon {
+      opacity: 0.5;
+      transform: scale(1.1);
+    }
+    .project-thumb .overlay {
+      position: absolute;
+      inset: 0;
+      background: var(--accent-gradient);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    .project-card:hover .overlay { opacity: 0.06; }
+    .project-info {
+      padding: 1.4rem;
+    }
+    .project-info h3 {
+      font-size: 1.05rem;
+      font-weight: 500;
+      margin-bottom: 0.4rem;
+    }
+    .project-info p {
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      font-weight: 300;
+      line-height: 1.6;
+    }
+    .project-tags {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.7rem;
+      flex-wrap: wrap;
+    }
+    .project-tags span {
+      padding: 0.15rem 0.5rem;
+      border-radius: 100px;
+      background: rgba(79, 195, 247, 0.06);
+      border: 1px solid var(--border-color);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+    }
+
+    /* ===== FUTURE WORKS ===== */
+    .future-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      transition: all 0.4s ease;
+    }
+    .future-card:hover {
+      border-color: var(--accent-1);
+      transform: translateY(-4px);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.3);
+    }
+    .future-card .icon {
+      font-size: 2.5rem;
+      flex-shrink: 0;
+      opacity: 0.6;
+    }
+    .future-card .content h3 {
+      font-size: 1.1rem;
+      font-weight: 500;
+      margin-bottom: 0.4rem;
+    }
+    .future-card .content p {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 300;
+      line-height: 1.7;
+    }
+    .future-card .content .tag {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(79, 195, 247, 0.06);
+      border: 1px solid var(--border-color);
+      font-size: 0.7rem;
+      color: var(--accent-1);
+      margin-top: 0.6rem;
+    }
+
+    /* ===== GITHUB ===== */
+    .github-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.5rem 2rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 1.2rem;
+      text-decoration: none;
+      color: var(--text-primary);
+      transition: all 0.3s ease;
+      margin-top: 0.5rem;
+    }
+    .github-card:hover {
+      border-color: var(--accent-1);
+      transform: translateY(-3px);
+      box-shadow: 0 12px 32px var(--glow-color);
+    }
+    .github-card svg {
+      width: 28px; height: 28px;
+      fill: var(--text-secondary);
+      flex-shrink: 0;
+    }
+    .github-card:hover svg {
+      fill: var(--text-primary);
+    }
+    .github-card .gh-text {
+      font-size: 0.85rem;
+    }
+    .github-card .gh-text .handle {
+      color: var(--accent-1);
+    }
+    .github-card .gh-text .desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+
+    /* ===== CONTACT ===== */
+    .contact-content {
+      text-align: center;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+    .contact-links {
+      display: flex;
+      justify-content: center;
+      gap: 1.2rem;
+      margin-top: 2rem;
+      flex-wrap: wrap;
+    }
+    .contact-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      text-decoration: none;
+      transition: all 0.35s ease;
+      position: relative;
+    }
+    .contact-link svg {
+      width: 20px; height: 20px;
+      fill: var(--text-secondary);
+      transition: fill 0.3s ease;
+    }
+    .contact-link:hover {
+      transform: translateY(-4px);
+      border-color: var(--accent-1);
+      background: rgba(79, 195, 247, 0.06);
+      box-shadow: 0 8px 24px var(--glow-color);
+    }
+    .contact-link:hover svg {
+      fill: var(--text-primary);
+    }
+    .contact-link .tooltip {
+      position: absolute;
+      bottom: -30px;
+      left: 50%;
+      transform: translateX(-50%) translateY(4px);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      pointer-events: none;
+    }
+    .contact-link:hover .tooltip {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .contact-email {
+      display: inline-block;
+      margin-top: 1.5rem;
+      color: var(--accent-1);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.3s ease;
+      font-weight: 300;
+    }
+    .contact-email:hover {
+      border-bottom-color: var(--accent-1);
+    }
+
+    /* ===== FOOTER ===== */
+    footer {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      padding: 3rem 2rem 2rem;
+      border-top: 1px solid var(--border-color);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    footer p {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 300;
+    }
+    footer .footer-heart {
+      color: #ff6b6b;
+      display: inline-block;
+      animation: heartbeat 1.5s ease-in-out infinite;
+    }
+    @keyframes heartbeat {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.15); }
+    }
+
+    /* ===== REVEAL ON SCROLL ===== */
+    .reveal {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ===== ANIMATIONS ===== */
+    @keyframes fade-up {
+      0% { opacity: 0; transform: translateY(30px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 900px) {
+      .about-grid {
+        grid-template-columns: 1fr;
+        gap: 2.5rem;
+      }
+      .research-grid {
+        grid-template-columns: 1fr;
+      }
+      .top-bar {
+        right: 1.2rem;
+        top: 10px;
+      }
+      .future-card {
+        flex-direction: column;
+        text-align: center;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .navbar {
+        padding: 0 1.2rem;
+      }
+      .nav-links {
+        position: fixed;
+        top: var(--nav-height); left: 0; right: 0;
+        flex-direction: column;
+        background: var(--nav-bg);
+        backdrop-filter: blur(20px);
+        border-bottom: 1px solid var(--border-color);
+        padding: 0.5rem 0;
+        gap: 0;
+        transform: translateY(-110%);
+        transition: transform 0.35s ease;
+      }
+      .nav-links.open {
+        transform: translateY(0);
+      }
+      .nav-links a {
+        padding: 0.8rem 1.5rem;
+        border-radius: 0;
+      }
+      .nav-links a::after { display: none; }
+      .nav-toggle {
+        display: flex;
+      }
+      .top-bar {
+        margin-right: 0.5rem;
+      }
+      .top-btn span:not(:empty) {
+        display: none;
+      }
+      .hero h1 {
+        font-size: clamp(2rem, 10vw, 3rem);
+      }
+      section {
+        padding: 3rem 1.2rem;
+      }
+      .projects-grid {
+        grid-template-columns: 1fr;
+      }
+      .about-stats {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.8rem;
+      }
+      .stat-card {
+        padding: 1rem 0.5rem;
+      }
+      .stat-number {
+        font-size: 1.5rem;
+      }
+      .contact-links {
+        gap: 0.8rem;
+      }
+    }
+
+    @media (max-width: 400px) {
+      .about-stats {
+        grid-template-columns: 1fr;
+      }
+      .hero-avatar {
+        width: 85px; height: 85px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== LOADER ===== -->
+  <div id="loader">
+    <div class="loader-ring"></div>
+    <div class="loader-text">Loading...</div>
+  </div>
+
+  <!-- ===== PARTICLE CANVAS ===== -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- ===== NAVIGATION ===== -->
+  <nav class="navbar" id="navbar">
+    <span class="nav-logo">lovekang</span>
+
+    <!-- ===== THEME & LANG TOGGLES (inside navbar) ===== -->
+    <div class="top-bar">
+      <button class="top-btn" id="themeToggle" title="切换主题">&#9790; <span id="themeLabel">暗色</span></button>
+      <button class="top-btn" id="langToggle" title="Switch Language">&#127760; <span id="langLabel">EN</span></button>
+    </div>
+
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#hero" class="active" data-i18n="nav.home">首页</a></li>
+      <li><a href="#about" data-i18n="nav.about">关于</a></li>
+      <li><a href="#research" data-i18n="nav.research">研究</a></li>
+      <li><a href="#skills" data-i18n="nav.skills">技能</a></li>
+      <li><a href="#projects" data-i18n="nav.projects">项目</a></li>
+      <li><a href="#contact" data-i18n="nav.contact">联系</a></li>
+    </ul>
+  </nav>
+
+  <!-- ===== HERO ===== -->
+  <section class="hero" id="hero">
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        <span data-i18n="hero.badge">开放交流</span>
+      </div>
+
+      <div class="hero-avatar-wrapper">
+        <img src="%E5%A4%B4%E5%83%8F.jpg" alt="lovekang avatar" class="hero-avatar">
+      </div>
+
+      <h1>Hi, I'm <span class="gradient-text">lovekang</span></h1>
+      <p class="hero-sub">
+        <span class="seu-badge">SEU</span>
+        &nbsp;<span data-i18n="hero.sub1">硕士在读</span>
+        <span data-i18n="hero.sub2">· 计算机视觉 · 夜间图像去雾</span>
+      </p>
+
+      <p class="hero-typing">
+        <span id="typewriter"></span><span class="cursor"></span>
+      </p>
+
+      <a href="#about" class="hero-cta">
+        <span data-i18n="hero.cta">了解更多</span>
+        <span class="arrow">&rarr;</span>
+      </a>
+    </div>
+
+    <div class="scroll-indicator">
+      <div class="mouse"></div>
+      <span data-i18n="hero.scroll">滚动</span>
+    </div>
+  </section>
+
+  <!-- ===== ABOUT ===== -->
+  <section id="about" class="reveal">
+    <div class="section-label" data-i18n="about.label">关于我</div>
+    <div class="about-grid">
+      <div class="about-text">
+        <h2 class="section-title" data-i18n="about.title">在黑暗中<br>看清世界</h2>
+        <p>
+          <span class="highlight">lovekang</span><span data-i18n="about.p1">，东南大学（SEU）硕士在读（研二），主攻</span>
+          <span class="tag-pill" data-i18n="about.tag1">夜间图像去雾</span>
+          <span data-i18n="about.p2">与</span>
+          <span class="tag-pill" data-i18n="about.tag2">底层计算机视觉</span>。
+        </p>
+        <p data-i18n="about.p3">
+          我的研究方向聚焦于夜间有雾场景下的视觉恢复——低光照、复杂人工光源与大气散射共同作用，形成白天去雾方法无法处理的独特退化模式。我探索如何用深度学习穿透黑暗，还原清晰世界。
+        </p>
+        <p data-i18n="about.p4">
+          日常主力语言是 Python，PyTorch 是首选框架，搭配 NumPy、OpenCV，偶尔用 C++ 优化性能。我热衷于将学术研究落地到自动驾驶、安防监控等真实场景。同时正在探索如何将 Agent 技术与我的视觉工作结合，做一些有意义的事。
+        </p>
+        <a href="https://github.com/lovekang3344" target="_blank" class="github-card">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          <div class="gh-text">
+            <div class="handle">lovekang3344</div>
+            <div class="desc" data-i18n="about.gh">我的代码 & 研究仓库</div>
+          </div>
+        </a>
+      </div>
+      <div class="about-stats">
+        <div class="stat-card">
+          <div class="stat-icon">&#x1F393;</div>
+          <div class="stat-number" data-count="2">0</div>
+          <div class="stat-label" data-i18n="about.stat1">研究经验（年）</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">&#x1F4D6;</div>
+          <div class="stat-number" data-count="10">0</div>
+          <div class="stat-label" data-i18n="about.stat2">每周读论文</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">&#x1F4BB;</div>
+          <div class="stat-number" data-count="3">0</div>
+          <div class="stat-label" data-i18n="about.stat3">活跃项目</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">&#x2728;</div>
+          <div class="stat-number" data-count="6">0</div>
+          <div class="stat-label" data-i18n="about.stat4">模型训练次数</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== RESEARCH ===== -->
+  <section id="research" class="reveal">
+    <div class="section-label" data-i18n="research.label">研究方向</div>
+    <h2 class="section-title" data-i18n="research.title">夜间图像去雾</h2>
+    <p class="section-subtitle" data-i18n="research.sub">
+      专注于夜间有雾场景的视觉恢复——低光照、非均匀光照与大气散射共同形成的复杂退化，挑战传统去雾方法的极限。
+    </p>
+    <div class="research-grid">
+      <div class="research-card">
+        <div class="research-icon">&#x1F303;</div>
+        <h3 data-i18n="research.card1.title">夜间去雾</h3>
+        <p data-i18n="research.card1.desc">
+          应对夜间雾霾的独特挑战：低信噪比、人工光源导致的颜色失真、空间变化雾密度。开发联合去雾与光照增强的深度模型。
+        </p>
+        <span class="tag">Python</span>
+        <span class="tag">PyTorch</span>
+      </div>
+      <div class="research-card">
+        <div class="research-icon">&#x1F4A1;</div>
+        <h3 data-i18n="research.card2.title">光照感知复原</h3>
+        <p data-i18n="research.card2.desc">
+          建模非均匀夜间光照（路灯、车灯、霓虹灯辉光）与雾散射的交互。设计将光照与透射率分离的先验。
+        </p>
+        <span class="tag">Illumination Prior</span>
+        <span class="tag">Physical Model</span>
+      </div>
+      <div class="research-card">
+        <div class="research-icon">&#x1F310;</div>
+        <h3 data-i18n="research.card3.title">真实场景部署</h3>
+        <p data-i18n="research.card3.desc">
+          弥合夜间去雾中合成数据与真实场景的域差距。探索自监督与半监督学习范式，在安防与自动驾驶场景中泛化。
+        </p>
+        <span class="tag">Domain Adaptation</span>
+        <span class="tag">Deployment</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FUTURE: AGENT + VISION ===== -->
+  <section id="future" class="reveal">
+    <div class="section-label" data-i18n="future.label">未来方向</div>
+    <h2 class="section-title" data-i18n="future.title">视觉 × Agent</h2>
+    <p class="section-subtitle" data-i18n="future.sub">
+      正在探索如何将 Agent 技术与底层视觉工作结合，构建能主动感知、推理和行动的智能视觉系统。
+    </p>
+    <div class="future-card">
+      <div class="icon">&#x1F916;</div>
+      <div class="content">
+        <h3 data-i18n="future.card.title">Agent-Enhanced Vision System</h3>
+        <p data-i18n="future.card.desc">
+          结合大语言模型的多模态能力与图像复原专业知识，构建能够理解图像退化、自主选择复原策略、并在复杂环境中进行推理和决策的 Agent 系统。目标是将传统"被动修复"升级为"主动感知-推理-行动"的智能视觉闭环。
+        </p>
+        <span class="tag">LLM Agent</span>
+        <span class="tag">Multi-modal</span>
+        <span class="tag">Vision + Reasoning</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SKILLS ===== -->
+  <section id="skills" class="reveal">
+    <div class="section-label" style="text-align:center" data-i18n="skills.label">技术栈</div>
+    <h2 class="section-title" style="text-align:center" data-i18n="skills.title">工具与专长</h2>
+    <p class="section-subtitle" style="text-align:center;margin-left:auto;margin-right:auto" data-i18n="skills.sub">
+      日常研究与开发中使用的核心工具。
+    </p>
+    <div class="skills-cloud">
+      <span class="skill-tag highlight">Python</span>
+      <span class="skill-tag highlight">PyTorch</span>
+      <span class="skill-tag highlight">Deep Learning</span>
+      <span class="skill-tag">Nighttime Dehazing</span>
+      <span class="skill-tag">Low-Level Vision</span>
+      <span class="skill-tag">Computer Vision</span>
+      <span class="skill-tag">Agent / LLM</span>
+      <span class="skill-tag">OpenCV</span>
+      <span class="skill-tag">NumPy</span>
+      <span class="skill-tag">CUDA</span>
+      <span class="skill-tag">ONNX</span>
+      <span class="skill-tag">TensorRT</span>
+      <span class="skill-tag">Diffusion Model</span>
+      <span class="skill-tag">Transformer</span>
+      <span class="skill-tag">Linux</span>
+      <span class="skill-tag">Git</span>
+    </div>
+  </section>
+
+  <!-- ===== PROJECTS / PUBLICATIONS ===== -->
+  <section id="projects" class="reveal">
+    <div class="section-label" data-i18n="projects.label">论文</div>
+    <h2 class="section-title" data-i18n="projects.title">发表工作</h2>
+    <p class="section-subtitle" data-i18n="projects.sub">
+      学术论文与开源实现 —— 后续会在这里更新论文、PDF 链接与 GitHub 仓库。
+    </p>
+    <div class="projects-grid">
+      <div class="project-card">
+        <div class="project-thumb">
+          <div class="overlay"></div>
+          <span class="placeholder-icon">&#x1F4D6;</span>
+        </div>
+        <div class="project-info">
+          <h3 style="font-weight:300;opacity:0.5;font-size:0.9rem;" data-i18n="projects.placeholder">即将到来...</h3>
+          <p style="font-size:0.75rem;line-height:1.5;">
+            <span data-i18n="projects.placeholderDesc">后续更新论文标题、PDF 链接与 GitHub 仓库</span>
+            <br><span style="color:var(--accent-1);font-size:0.7rem;">[PDF]</span> <span style="color:var(--accent-1);font-size:0.7rem;">[GitHub]</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== CONTACT ===== -->
+  <section id="contact" class="reveal">
+    <div class="section-label" style="text-align:center" data-i18n="contact.label">联系</div>
+    <h2 class="section-title" style="text-align:center" data-i18n="contact.title">保持联系</h2>
+    <p class="section-subtitle" style="text-align:center;margin-left:auto;margin-right:auto" data-i18n="contact.sub">
+      对计算机视觉、图像复原或 Agent 感兴趣？随时联系！
+    </p>
+    <div class="contact-content">
+      <div class="contact-links">
+        <a href="https://github.com/lovekang3344" target="_blank" class="contact-link" aria-label="GitHub">
+          <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          <span class="tooltip">GitHub</span>
+        </a>
+        <a href="#" class="contact-link" aria-label="Twitter">
+          <svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+          <span class="tooltip">Twitter/X</span>
+        </a>
+        <a href="#" class="contact-link" aria-label="Google Scholar">
+          <svg viewBox="0 0 24 24"><path d="M5.242 13.769L0 9.5 12 0l12 9.5-5.242 4.269C17.548 11.249 14.978 9.5 12 9.5c-2.977 0-5.548 1.748-6.758 4.269zM12 10a7 7 0 100 14 7 7 0 000-14z"/></svg>
+          <span class="tooltip">Scholar</span>
+        </a>
+        <a href="mailto:lovekang@seu.edu.cn" class="contact-link" aria-label="Email">
+          <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+          <span class="tooltip">Email</span>
+        </a>
+      </div>
+      <p style="margin-top:1.5rem; font-size:0.75rem; color:var(--text-muted);" data-i18n="contact.location">
+        南京 · 中国
+      </p>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <p>
+      &copy; 2026 lovekang &mdash; <span data-i18n="footer.text">用</span>
+      <span class="footer-heart">&hearts;</span>
+      <span data-i18n="footer.text2">和很多 &#9749; 打造</span>
+    </p>
+  </footer>
+
+  <!-- ===== JAVASCRIPT ===== -->
+  <script>
+    (function() {
+      'use strict';
+
+      // ===== I18N Dictionary =====
+      const i18n = {
+        'zh': {
+          'nav.home': '首页',
+          'nav.about': '关于',
+          'nav.research': '研究',
+          'nav.skills': '技能',
+          'nav.projects': '项目',
+          'nav.contact': '联系',
+          'hero.badge': '开放交流',
+          'hero.sub1': '硕士在读',
+          'hero.sub2': '· 计算机视觉 · 夜间图像去雾',
+          'hero.cta': '了解更多',
+          'hero.scroll': '滚动',
+          'about.label': '关于我',
+          'about.title': '在黑暗中<br>看清世界',
+          'about.p1': '，东南大学（SEU）硕士在读（研二），主攻',
+          'about.tag1': '夜间图像去雾',
+          'about.p2': '与',
+          'about.tag2': '底层计算机视觉',
+          'about.p3': '我的研究方向聚焦于夜间有雾场景下的视觉恢复——低光照、复杂人工光源与大气散射共同作用，形成白天去雾方法无法处理的独特退化模式。我探索如何用深度学习穿透黑暗，还原清晰世界。',
+          'about.p4': '日常主力语言是 Python，PyTorch 是首选框架，搭配 NumPy、OpenCV，偶尔用 C++ 优化性能。我热衷于将学术研究落地到自动驾驶、安防监控等真实场景。同时正在探索如何将 Agent 技术与我的视觉工作结合，做一些有意义的事。',
+          'about.gh': '我的代码 & 研究仓库',
+          'about.stat1': '研究经验（年）',
+          'about.stat2': '每周读论文',
+          'about.stat3': '活跃项目',
+          'about.stat4': '模型训练次数',
+          'research.label': '研究方向',
+          'research.title': '夜间图像去雾',
+          'research.sub': '专注于夜间有雾场景的视觉恢复——低光照、非均匀光照与大气散射共同形成的复杂退化，挑战传统去雾方法的极限。',
+          'research.card1.title': '夜间去雾',
+          'research.card1.desc': '应对夜间雾霾的独特挑战：低信噪比、人工光源导致的颜色失真、空间变化雾密度。开发联合去雾与光照增强的深度模型。',
+          'research.card2.title': '光照感知复原',
+          'research.card2.desc': '建模非均匀夜间光照（路灯、车灯、霓虹灯辉光）与雾散射的交互。设计将光照与透射率分离的先验。',
+          'research.card3.title': '真实场景部署',
+          'research.card3.desc': '弥合夜间去雾中合成数据与真实场景的域差距。探索自监督与半监督学习范式，在安防与自动驾驶场景中泛化。',
+          'future.label': '未来方向',
+          'future.title': '视觉 × Agent',
+          'future.sub': '正在探索如何将 Agent 技术与底层视觉工作结合，构建能主动感知、推理和行动的智能视觉系统。',
+          'future.card.title': 'Agent 增强视觉系统',
+          'future.card.desc': '结合大语言模型的多模态能力与图像复原专业知识，构建能够理解图像退化、自主选择复原策略、并在复杂环境中进行推理和决策的 Agent 系统。目标是将传统"被动修复"升级为"主动感知-推理-行动"的智能视觉闭环。',
+          'skills.label': '技术栈',
+          'skills.title': '工具与专长',
+          'skills.sub': '日常研究与开发中使用的核心工具。',
+          'projects.label': '论文',
+          'projects.title': '发表工作',
+          'projects.sub': '学术论文与开源实现 —— 后续会在这里更新论文、PDF 链接与 GitHub 仓库。',
+          'projects.placeholder': '即将到来...',
+          'projects.placeholderDesc': '后续更新论文标题、PDF 链接与 GitHub 仓库',
+          'contact.label': '联系',
+          'contact.title': '保持联系',
+          'contact.sub': '对计算机视觉、图像复原或 Agent 感兴趣？随时联系！',
+          'contact.location': '南京 · 中国',
+          'footer.text': '用',
+          'footer.text2': '和很多 &#9749; 打造',
+          'typewriter': [
+            '穿透夜雾，还原清晰。',
+            'Python · PyTorch · 深度学习。',
+            '让不可见变为可见。',
+            '夜间去雾研究者。',
+            'SEU · 计算机视觉 · Agent 探索中。'
+          ]
+        },
+        'en': {
+          'nav.home': 'Home',
+          'nav.about': 'About',
+          'nav.research': 'Research',
+          'nav.skills': 'Skills',
+          'nav.projects': 'Publications',
+          'nav.contact': 'Contact',
+          'hero.badge': 'Open to connect',
+          'hero.sub1': 'M.Eng Candidate',
+          'hero.sub2': ' · Computer Vision · Nighttime Dehazing',
+          'hero.cta': 'Explore More',
+          'hero.scroll': 'Scroll',
+          'about.label': 'about me',
+          'about.title': 'Seeing through<br>the dark',
+          'about.p1': ' is a Master\'s student at Southeast University (SEU), specializing in ',
+          'about.tag1': 'Nighttime Image Dehazing',
+          'about.p2': ' and ',
+          'about.tag2': 'Low-Level Computer Vision',
+          'about.p3': 'My research focuses on restoring visibility in nighttime hazy images — a uniquely challenging problem where low light, complex artificial illumination, and atmospheric scattering create intricate degradation patterns that daytime methods can\'t handle.',
+          'about.p4': 'Python is my daily driver, PyTorch is my go-to, with NumPy, OpenCV, and occasional C++ for performance. I\'m passionate about bridging academic research to real-world deployment in autonomous driving and surveillance. I\'m also exploring how Agent technology can combine with my vision work to build meaningful applications.',
+          'about.gh': 'Check out my code & research repos',
+          'about.stat1': 'Years Research',
+          'about.stat2': 'Papers / Week',
+          'about.stat3': 'Active Projects',
+          'about.stat4': 'Models Trained',
+          'research.label': 'research',
+          'research.title': 'Nighttime Image Dehazing',
+          'research.sub': 'Dedicated to restoring visibility in nighttime hazy scenes — where low light, non-uniform illumination, and atmospheric scattering challenge conventional dehazing methods.',
+          'research.card1.title': 'Nighttime Dehazing',
+          'research.card1.desc': 'Tackling low SNR, color distortion from artificial lights, and spatially-varying haze density. Developing deep models that jointly dehaze and enhance illumination.',
+          'research.card2.title': 'Illumination-Aware Restoration',
+          'research.card2.desc': 'Modeling non-uniform nighttime lighting (streetlamps, headlights, neon glow) interacting with haze scattering. Designing priors that separate illumination from transmission.',
+          'research.card3.title': 'Real-World Deployment',
+          'research.card3.desc': 'Bridging synthetic-to-real domain gaps for nighttime dehazing via self-supervised and semi-supervised learning for surveillance and autonomous driving.',
+          'future.label': 'future work',
+          'future.title': 'Vision × Agent',
+          'future.sub': 'Exploring how Agent technology can combine with low-level vision to build intelligent systems that perceive, reason, and act.',
+          'future.card.title': 'Agent-Enhanced Vision System',
+          'future.card.desc': 'Combining LLM multi-modal capabilities with image restoration expertise to build an Agent system that understands degradation, selects restoration strategies autonomously, and performs reasoning and decision-making in complex environments. The goal: upgrade from passive "fixing" to an active "perceive-reason-act" intelligent vision loop.',
+          'skills.label': 'skills',
+          'skills.title': 'Tools & Expertise',
+          'skills.sub': 'Core tools I work with daily in research and development.',
+          'projects.label': 'publications',
+          'projects.title': 'Publications',
+          'projects.sub': 'Papers and open-source implementations — coming soon with PDF links and GitHub repos.',
+          'projects.placeholder': 'Coming soon...',
+          'projects.placeholderDesc': 'Paper titles, PDF links & GitHub repos will be updated here',
+          'contact.label': 'contact',
+          'contact.title': 'Let\'s Connect',
+          'contact.sub': 'Interested in computer vision, image restoration, or Agent? Reach out anytime!',
+          'contact.location': 'Nanjing, China',
+          'footer.text': 'crafted with',
+          'footer.text2': 'and lots of &#9749;',
+          'typewriter': [
+            'Cutting through the night haze.',
+            'Python · PyTorch · Deep Learning.',
+            'Making the invisible visible.',
+            'Nighttime dehazing specialist.',
+            'SEU · CV · Exploring Agent.'
+          ]
+        }
+      };
+
+      let currentLang = 'zh';
+      let isLight = false;
+      let typewriterInstance = null;
+
+      // ===== Apply I18N =====
+      function applyLang(lang) {
+        currentLang = lang;
+        const dict = i18n[lang];
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+          const key = el.getAttribute('data-i18n');
+          const keys = key.split('.');
+          let val = dict;
+          for (const k of keys) {
+            val = val ? val[k] : null;
+          }
+          if (val !== null && val !== undefined) {
+            if (el.tagName === 'SPAN' || el.tagName === 'A' || el.tagName === 'BUTTON' || el.tagName === 'P' || el.tagName === 'H2' || el.tagName === 'H3' || el.tagName === 'DIV') {
+              el.innerHTML = val;
+            } else {
+              el.textContent = val;
+            }
+          }
+        });
+        document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+        document.getElementById('langLabel').textContent = lang === 'zh' ? 'EN' : '中';
+
+        // Restart typewriter with new phrases
+        if (typewriterInstance) {
+          typewriterInstance.restart(dict.typewriter);
+        }
+      }
+
+      // ===== Theme Toggle =====
+      function toggleTheme() {
+        isLight = !isLight;
+        document.body.classList.toggle('light', isLight);
+        document.getElementById('themeLabel').textContent = isLight ?
+          (currentLang === 'zh' ? '白天' : 'Light') :
+          (currentLang === 'zh' ? '暗色' : 'Dark');
+      }
+
+      // ===== LOADER =====
+      window.addEventListener('load', function() {
+        setTimeout(function() {
+          document.getElementById('loader').classList.add('hidden');
+          document.body.classList.add('loaded');
+        }, 800);
+      });
+
+      // ===== PARTICLE BACKGROUND =====
+      (function initParticles() {
+        const canvas = document.getElementById('bg-canvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        let w, h;
+
+        function resize() {
+          w = canvas.width = window.innerWidth;
+          h = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        const COUNT = 70;
+        for (let i = 0; i < COUNT; i++) {
+          particles.push({
+            x: Math.random() * w,
+            y: Math.random() * h,
+            vx: (Math.random() - 0.5) * 0.25,
+            vy: (Math.random() - 0.5) * 0.25,
+            r: Math.random() * 1.5 + 0.5,
+            alpha: Math.random() * 0.35 + 0.08
+          });
+        }
+
+        function draw() {
+          ctx.clearRect(0, 0, w, h);
+          for (const p of particles) {
+            p.x += p.vx;
+            p.y += p.vy;
+            if (p.x < 0) p.x = w;
+            if (p.x > w) p.x = 0;
+            if (p.y < 0) p.y = h;
+            if (p.y > h) p.y = 0;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(79,195,247,' + p.alpha + ')';
+            ctx.fill();
+          }
+          for (let i = 0; i < particles.length; i++) {
+            for (let j = i + 1; j < particles.length; j++) {
+              const dx = particles[i].x - particles[j].x;
+              const dy = particles[i].y - particles[j].y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < 150) {
+                ctx.beginPath();
+                ctx.moveTo(particles[i].x, particles[i].y);
+                ctx.lineTo(particles[j].x, particles[j].y);
+                ctx.strokeStyle = 'rgba(79,195,247,' + (0.06 * (1 - dist / 150)) + ')';
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+              }
+            }
+          }
+          requestAnimationFrame(draw);
+        }
+        draw();
+      })();
+
+      // ===== TYPEWRITER =====
+      (function typewriter() {
+        const el = document.getElementById('typewriter');
+        let phrases = i18n[currentLang].typewriter;
+        let phraseIdx = 0;
+        let charIdx = 0;
+        let isDeleting = false;
+        let speed = 70;
+        let timer = null;
+
+        function type() {
+          const current = phrases[phraseIdx];
+          if (!isDeleting) {
+            el.textContent = current.substring(0, charIdx + 1);
+            charIdx++;
+            if (charIdx === current.length) {
+              isDeleting = true;
+              speed = 1800;
+            } else {
+              speed = 50 + Math.random() * 50;
+            }
+          } else {
+            el.textContent = current.substring(0, charIdx - 1);
+            charIdx--;
+            if (charIdx === 0) {
+              isDeleting = false;
+              phraseIdx = (phraseIdx + 1) % phrases.length;
+              speed = 350;
+            } else {
+              speed = 25 + Math.random() * 25;
+            }
+          }
+          timer = setTimeout(type, speed);
+        }
+        type();
+
+        typewriterInstance = {
+          restart: function(newPhrases) {
+            clearTimeout(timer);
+            phrases = newPhrases;
+            phraseIdx = 0;
+            charIdx = 0;
+            isDeleting = false;
+            speed = 70;
+            el.textContent = '';
+            timer = setTimeout(type, 500);
+          }
+        };
+      })();
+
+      // ===== THEME & LANG EVENTS =====
+      document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+      document.getElementById('langToggle').addEventListener('click', function() {
+        applyLang(currentLang === 'zh' ? 'en' : 'zh');
+      });
+
+      // ===== NAV HIDE ON SCROLL DOWN =====
+      (function navHide() {
+        const nav = document.getElementById('navbar');
+        let lastScroll = 0;
+
+        window.addEventListener('scroll', function() {
+          const current = window.pageYOffset;
+          if (current > lastScroll && current > 100) {
+            nav.classList.add('hidden-nav');
+          } else {
+            nav.classList.remove('hidden-nav');
+          }
+          lastScroll = current;
+        }, { passive: true });
+      })();
+
+      // ===== MOBILE NAV TOGGLE =====
+      (function mobileNav() {
+        const toggle = document.getElementById('navToggle');
+        const links = document.getElementById('navLinks');
+
+        toggle.addEventListener('click', function() {
+          links.classList.toggle('open');
+        });
+
+        document.querySelectorAll('.nav-links a').forEach(function(a) {
+          a.addEventListener('click', function() {
+            links.classList.remove('open');
+          });
+        });
+      })();
+
+      // ===== ACTIVE NAV LINK ON SCROLL =====
+      (function activeNav() {
+        const sections = document.querySelectorAll('section[id]');
+        const navLinks = document.querySelectorAll('.nav-links a');
+
+        function updateActive() {
+          let currentId = '';
+          const scrollY = window.pageYOffset + 100;
+
+          sections.forEach(function(section) {
+            const top = section.offsetTop;
+            const height = section.offsetHeight;
+            if (scrollY >= top && scrollY < top + height) {
+              currentId = section.getAttribute('id');
+            }
+          });
+
+          navLinks.forEach(function(link) {
+            link.classList.remove('active');
+            if (link.getAttribute('href') === '#' + currentId) {
+              link.classList.add('active');
+            }
+          });
+        }
+
+        window.addEventListener('scroll', updateActive, { passive: true });
+        updateActive();
+      })();
+
+      // ===== SCROLL REVEAL =====
+      (function scrollReveal() {
+        const reveals = document.querySelectorAll('.reveal');
+        const observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('visible');
+            }
+          });
+        }, { threshold: 0.1 });
+
+        reveals.forEach(function(el) {
+          observer.observe(el);
+        });
+      })();
+
+      // ===== COUNTER ANIMATION =====
+      (function counterAnim() {
+        const counters = document.querySelectorAll('.stat-number');
+        const observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting) {
+              const el = entry.target;
+              const target = parseInt(el.getAttribute('data-count'), 10);
+              let current = 0;
+              const step = Math.max(1, Math.ceil(target / 35));
+              const interval = setInterval(function() {
+                current += step;
+                if (current >= target) {
+                  el.textContent = target;
+                  clearInterval(interval);
+                } else {
+                  el.textContent = current;
+                }
+              }, 30);
+              observer.unobserve(el);
+            }
+          });
+        }, { threshold: 0.5 });
+
+        counters.forEach(function(el) {
+          observer.observe(el);
+        });
+      })();
+
+    })();
+  </script>
+</body>
+</html>
